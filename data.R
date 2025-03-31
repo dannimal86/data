@@ -3,6 +3,9 @@
 # and flags exceptions where limits exceed reference values
 
 # Load required libraries
+if (!requireNamespace("openxlsx", quietly = TRUE)) {
+  install.packages("openxlsx")
+}
 library(openxlsx)
 
 # Error handling function to make script more robust
@@ -15,18 +18,17 @@ safe_as_numeric <- function(x) {
 
 # Main processing function
 process_trading_data <- function() {
-  # Set working directory to the location of your files if needed
-  # setwd("/path/to/your/files")
-  
-  cat("Starting data processing...\n")
+  # Print current working directory for debugging
+  cat("Current working directory:", getwd(), "\n")
   
   # Step 1: Load the static data file
   cat("Loading static reference data...\n")
-  static_data <- try(read.csv("static_data.csv", stringsAsFactors = FALSE), silent = TRUE)
-  
-  if(inherits(static_data, "try-error")) {
-    stop("Error loading static_data.csv. Please check if the file exists and is accessible.")
+  if (!file.exists("static_data.csv")) {
+    stop("static_data.csv file not found in the current directory.")
   }
+  
+  static_data <- read.csv("static_data.csv", stringsAsFactors = FALSE)
+  cat("Successfully loaded static data with", nrow(static_data), "rows and", ncol(static_data), "columns.\n")
   
   # Step 2: Process CQG data
   cat("Processing CQG data...\n")
@@ -40,32 +42,41 @@ process_trading_data <- function() {
   cat("Processing Fidessa data...\n")
   process_fidessa_data(static_data)
   
-  cat("Data processing completed successfully.\n")
+  cat("Data processing completed.\n")
 }
 
 # Function to process CQG data
 process_cqg_data <- function(static_data) {
   # Load CQG data
-  cqg_file <- try(loadWorkbook("CQG Data extract.xlsx"), silent = TRUE)
+  cqg_file_path <- "CQG Data extract.xlsx"
   
-  if(inherits(cqg_file, "try-error")) {
-    cat("Error loading CQG Data extract.xlsx. Skipping CQG processing.\n")
+  if (!file.exists(cqg_file_path)) {
+    cat("Warning: CQG Data extract.xlsx file not found. Skipping CQG processing.\n")
     return()
   }
+  
+  cqg_file <- loadWorkbook(cqg_file_path)
   
   # Get sheet names
   sheet_names <- sheets(cqg_file)
   
-  if(length(sheet_names) == 0) {
-    cat("No sheets found in CQG Data extract.xlsx. Skipping CQG processing.\n")
+  if (length(sheet_names) == 0) {
+    cat("Warning: No sheets found in CQG Data extract.xlsx. Skipping CQG processing.\n")
     return()
   }
   
-  # Read the first sheet (or specified sheet if needed)
-  cqg_data <- try(read.xlsx(cqg_file, sheet = 1), silent = TRUE)
+  # Read the first sheet
+  cqg_data <- read.xlsx(cqg_file, sheet = 1)
   
-  if(inherits(cqg_data, "try-error") || ncol(cqg_data) < 5) {
-    cat("Error reading CQG data or unexpected format. Skipping CQG processing.\n")
+  cat("Successfully loaded CQG data with", nrow(cqg_data), "rows and", ncol(cqg_data), "columns.\n")
+  
+  # Check for required columns
+  required_columns <- c("Exchange", "Product", "Trade Size Limit", "Contract Position Limit", "Commodity Position Limit", "Type")
+  missing_columns <- required_columns[!required_columns %in% names(cqg_data)]
+  
+  if (length(missing_columns) > 0) {
+    cat("Warning: The following required columns are missing from CQG data:", paste(missing_columns, collapse=", "), "\n")
+    cat("Skipping CQG processing.\n")
     return()
   }
   
@@ -76,6 +87,7 @@ process_cqg_data <- function(static_data) {
   cqg_output$new_net <- character(nrow(cqg_data))
   
   # Process each row
+  cat("Processing", nrow(cqg_data), "rows of CQG data...\n")
   for(i in 1:nrow(cqg_data)) {
     # Extract relevant information
     exchange <- cqg_data[i, "Exchange"]
@@ -136,33 +148,57 @@ process_cqg_data <- function(static_data) {
   }
   
   # Write output to file
-  try(write.xlsx(cqg_output, "CQG_processed_output.xlsx"), silent = TRUE)
-  cat("CQG data processed and saved to CQG_processed_output.xlsx\n")
+  output_file <- "CQG_processed_output.xlsx"
+  cat("Writing CQG results to", output_file, "...\n")
+  
+  tryCatch({
+    write.xlsx(cqg_output, output_file)
+    cat("Successfully wrote CQG output to", output_file, "\n")
+    # Verify the file was created
+    if (file.exists(output_file)) {
+      cat("Confirmed file", output_file, "exists with size", file.info(output_file)$size, "bytes\n")
+    } else {
+      cat("WARNING: File", output_file, "was not created despite no errors!\n")
+    }
+  }, error = function(e) {
+    cat("ERROR: Failed to write CQG output to file:", e$message, "\n")
+    cat("Please check write permissions in the current directory.\n")
+  })
 }
 
 # Function to process TT data
 process_tt_data <- function(static_data) {
   # Load TT data
-  tt_file <- try(loadWorkbook("TT data extract.xlsx"), silent = TRUE)
+  tt_file_path <- "TT data extract.xlsx"
   
-  if(inherits(tt_file, "try-error")) {
-    cat("Error loading TT data extract.xlsx. Skipping TT processing.\n")
+  if (!file.exists(tt_file_path)) {
+    cat("Warning: TT data extract.xlsx file not found. Skipping TT processing.\n")
     return()
   }
+  
+  tt_file <- loadWorkbook(tt_file_path)
   
   # Get sheet names
   sheet_names <- sheets(tt_file)
   
-  if(length(sheet_names) == 0) {
-    cat("No sheets found in TT data extract.xlsx. Skipping TT processing.\n")
+  if (length(sheet_names) == 0) {
+    cat("Warning: No sheets found in TT data extract.xlsx. Skipping TT processing.\n")
     return()
   }
   
-  # Read the first sheet (or specified sheet if needed)
-  tt_data <- try(read.xlsx(tt_file, sheet = 1), silent = TRUE)
+  # Read the first sheet
+  tt_data <- read.xlsx(tt_file, sheet = 1)
   
-  if(inherits(tt_data, "try-error") || ncol(tt_data) < 7) {
-    cat("Error reading TT data or unexpected format. Skipping TT processing.\n")
+  cat("Successfully loaded TT data with", nrow(tt_data), "rows and", ncol(tt_data), "columns.\n")
+  
+  # Check for required columns
+  required_columns <- c("Exchange", "Family", "Max order quantity", "Max position product (net)", 
+                       "Type", "Spreads:Max order quantity")
+  missing_columns <- required_columns[!required_columns %in% names(tt_data)]
+  
+  if (length(missing_columns) > 0) {
+    cat("Warning: The following required columns are missing from TT data:", paste(missing_columns, collapse=", "), "\n")
+    cat("Skipping TT processing.\n")
     return()
   }
   
@@ -173,6 +209,7 @@ process_tt_data <- function(static_data) {
   tt_output$new_net <- character(nrow(tt_data))
   
   # Process each row
+  cat("Processing", nrow(tt_data), "rows of TT data...\n")
   for(i in 1:nrow(tt_data)) {
     # Extract relevant information
     exchange <- tt_data[i, "Exchange"]
@@ -239,33 +276,56 @@ process_tt_data <- function(static_data) {
   }
   
   # Write output to file
-  try(write.xlsx(tt_output, "TT_processed_output.xlsx"), silent = TRUE)
-  cat("TT data processed and saved to TT_processed_output.xlsx\n")
+  output_file <- "TT_processed_output.xlsx"
+  cat("Writing TT results to", output_file, "...\n")
+  
+  tryCatch({
+    write.xlsx(tt_output, output_file)
+    cat("Successfully wrote TT output to", output_file, "\n")
+    # Verify the file was created
+    if (file.exists(output_file)) {
+      cat("Confirmed file", output_file, "exists with size", file.info(output_file)$size, "bytes\n")
+    } else {
+      cat("WARNING: File", output_file, "was not created despite no errors!\n")
+    }
+  }, error = function(e) {
+    cat("ERROR: Failed to write TT output to file:", e$message, "\n")
+    cat("Please check write permissions in the current directory.\n")
+  })
 }
 
 # Function to process Fidessa data
 process_fidessa_data <- function(static_data) {
   # Load Fidessa data
-  fidessa_file <- try(loadWorkbook("Fidessa data extract.xlsx"), silent = TRUE)
+  fidessa_file_path <- "Fidessa data extract.xlsx"
   
-  if(inherits(fidessa_file, "try-error")) {
-    cat("Error loading Fidessa data extract.xlsx. Skipping Fidessa processing.\n")
+  if (!file.exists(fidessa_file_path)) {
+    cat("Warning: Fidessa data extract.xlsx file not found. Skipping Fidessa processing.\n")
     return()
   }
+  
+  fidessa_file <- loadWorkbook(fidessa_file_path)
   
   # Get sheet names
   sheet_names <- sheets(fidessa_file)
   
-  if(length(sheet_names) == 0) {
-    cat("No sheets found in Fidessa data extract.xlsx. Skipping Fidessa processing.\n")
+  if (length(sheet_names) == 0) {
+    cat("Warning: No sheets found in Fidessa data extract.xlsx. Skipping Fidessa processing.\n")
     return()
   }
   
-  # Read the first sheet (or specified sheet if needed)
-  fidessa_data <- try(read.xlsx(fidessa_file, sheet = 1), silent = TRUE)
+  # Read the first sheet
+  fidessa_data <- read.xlsx(fidessa_file, sheet = 1)
   
-  if(inherits(fidessa_data, "try-error") || ncol(fidessa_data) < 7) {
-    cat("Error reading Fidessa data or unexpected format. Skipping Fidessa processing.\n")
+  cat("Successfully loaded Fidessa data with", nrow(fidessa_data), "rows and", ncol(fidessa_data), "columns.\n")
+  
+  # Check for required columns
+  required_columns <- c("Exchange", "Product", "Max ord size", "Max pos size", "Max spread pos", "Asset class")
+  missing_columns <- required_columns[!required_columns %in% names(fidessa_data)]
+  
+  if (length(missing_columns) > 0) {
+    cat("Warning: The following required columns are missing from Fidessa data:", paste(missing_columns, collapse=", "), "\n")
+    cat("Skipping Fidessa processing.\n")
     return()
   }
   
@@ -276,6 +336,7 @@ process_fidessa_data <- function(static_data) {
   fidessa_output$new_net <- character(nrow(fidessa_data))
   
   # Process each row
+  cat("Processing", nrow(fidessa_data), "rows of Fidessa data...\n")
   for(i in 1:nrow(fidessa_data)) {
     # Extract relevant information
     exchange <- fidessa_data[i, "Exchange"]
@@ -341,8 +402,22 @@ process_fidessa_data <- function(static_data) {
   }
   
   # Write output to file
-  try(write.xlsx(fidessa_output, "Fidessa_processed_output.xlsx"), silent = TRUE)
-  cat("Fidessa data processed and saved to Fidessa_processed_output.xlsx\n")
+  output_file <- "Fidessa_processed_output.xlsx"
+  cat("Writing Fidessa results to", output_file, "...\n")
+  
+  tryCatch({
+    write.xlsx(fidessa_output, output_file)
+    cat("Successfully wrote Fidessa output to", output_file, "\n")
+    # Verify the file was created
+    if (file.exists(output_file)) {
+      cat("Confirmed file", output_file, "exists with size", file.info(output_file)$size, "bytes\n")
+    } else {
+      cat("WARNING: File", output_file, "was not created despite no errors!\n")
+    }
+  }, error = function(e) {
+    cat("ERROR: Failed to write Fidessa output to file:", e$message, "\n")
+    cat("Please check write permissions in the current directory.\n")
+  })
 }
 
 # Execute the main function
