@@ -19,10 +19,11 @@
 # ============================================================================
 
 # Load required libraries
-library(readxl)    # For reading Excel files (.xlsx and .xls)
 library(readr)     # For reading and writing CSV files
 library(dplyr)     # For data manipulation operations
 library(stringr)   # For string manipulation functions
+library(openxlsx)  # For reading Excel files without read_excel
+library(tools)     # For file extension utilities
 
 # =============================================================================
 # UTILITY FUNCTIONS
@@ -99,6 +100,39 @@ compare_limits <- function(limit_val, static_val, is_spread_or_option) {
   }
 }
 
+#' Read Excel file safely
+#'
+#' This function reads an Excel file (.xlsx or .xls) using the openxlsx package
+#' instead of readxl. It handles potential errors and returns NULL if reading fails.
+#'
+#' @param file_path Path to the Excel file
+#' @param sheet Sheet name or index to read (defaults to 1)
+#' @return A data frame containing the Excel data, or NULL if reading fails
+read_excel_safe <- function(file_path, sheet = 1) {
+  tryCatch({
+    # Check file extension to determine how to read it
+    ext <- tolower(file_ext(file_path))
+    
+    if (ext == "xlsx" || ext == "xls") {
+      # Read using openxlsx
+      data <- openxlsx::read.xlsx(file_path, sheet = sheet, detectDates = TRUE)
+      
+      # Replace empty strings with NA
+      data[] <- lapply(data, function(x) {
+        ifelse(x == "", NA, x)
+      })
+      
+      return(data)
+    } else {
+      cat("Unsupported file format:", ext, "\n")
+      return(NULL)
+    }
+  }, error = function(e) {
+    cat("Error reading Excel file:", e$message, "\n")
+    return(NULL)
+  })
+}
+
 # =============================================================================
 # MAIN PROCESSING FUNCTION
 # =============================================================================
@@ -144,9 +178,14 @@ process_files <- function() {
   # =========================================================================
   cat("Processing CQG data...\n")
   tryCatch({
-    # Read CQG data from Excel file
-    # The na parameter specifies values that should be treated as NA
-    cqg_data <- read_excel("CQG Data extract.xlsx", na = c("", "NA", "N/A"))
+    # Read CQG data from Excel file using our custom function
+    cqg_data <- read_excel_safe("CQG Data extract.xlsx")
+    
+    # Exit if file couldn't be read
+    if (is.null(cqg_data)) {
+      cat("Skipping CQG processing due to file reading error.\n")
+      return()
+    }
     
     # Process CQG data
     # The rowwise() function is used to perform operations on each row independently
@@ -230,8 +269,14 @@ process_files <- function() {
   # =========================================================================
   cat("Processing TT data...\n")
   tryCatch({
-    # Read TT data from Excel file
-    tt_data <- read_excel("TT data extract.xls", na = c("", "NA", "N/A"))
+    # Read TT data from Excel file using our custom function
+    tt_data <- read_excel_safe("TT data extract.xls")
+    
+    # Exit if file couldn't be read
+    if (is.null(tt_data)) {
+      cat("Skipping TT processing due to file reading error.\n")
+      return()
+    }
     
     # Process TT data
     tt_output <- tt_data %>%
@@ -317,8 +362,14 @@ process_files <- function() {
   # =========================================================================
   cat("Processing Fidessa data...\n")
   tryCatch({
-    # Read Fidessa data from Excel file
-    fidessa_data <- read_excel("Fidessa data extract.xlsx", na = c("", "NA", "N/A"))
+    # Read Fidessa data from Excel file using our custom function
+    fidessa_data <- read_excel_safe("Fidessa data extract.xlsx")
+    
+    # Exit if file couldn't be read
+    if (is.null(fidessa_data)) {
+      cat("Skipping Fidessa processing due to file reading error.\n")
+      return()
+    }
     
     # Process Fidessa data
     fidessa_output <- fidessa_data %>%
