@@ -1,0 +1,204 @@
+# Load necessary libraries
+library(openxlsx) # For reading .xlsx files
+# Function to safely convert to numeric, treating non-numeric as 0
+safe_as_numeric <- function(x) {
+  # Check if x is already numeric
+  if(is.numeric(x)) {
+    return(x)
+  }
+  # If not, try to convert, replacing non-convertible values with NA
+  y <- as.numeric(x)
+  # Replace NA with 0
+  y[is.na(y)] <- 0
+  return(y)
+}
+
+# Function to compare limits and flag exceptions
+compare_limits <- function(data_row, static_data, limit_column, static_max_column, static_net_column,
+                           is_option_func = function(row) FALSE, is_spread_func = function(row) FALSE,
+                           option_multiplier = 2, spread_multiplier = 2) {
+
+  # Find matching static data
+  static_match <- static_data[data_row$Exchange == static_data$cqg.Exchange & data_row$Product == static_data$cqg.Code,]
+
+  # Handle no match in static data
+  if (nrow(static_match) == 0) {
+    return(c("ILLIQUID PRODUCT", NA, NA))
+  }
+
+  # Get the limit value, handling non-numeric values as 0
+  limit <- safe_as_numeric(data_row[[limit_column]])
+
+  # Get static data values
+  max_value <- static_match[[static_max_column]]
+  net_value <- static_match[[static_net_column]]
+
+  # Check if it's an option or spread
+  is_option <- is_option_func(data_row)
+  is_spread <- is_spread_func(data_row)
+
+  # Adjust comparison values for options and spreads
+  adjusted_max <- ifelse(is_option | is_spread, max_value * ifelse(is_option,option_multiplier,spread_multiplier), max_value)
+  adjusted_net <- ifelse(is_option | is_spread, net_value * ifelse(is_option,option_multiplier,spread_multiplier), net_value)
+
+  # Compare limits and determine the "Check" value
+  check_value <- "PASS"
+  if (limit > adjusted_max) {
+    check_value <- "EXCEPTION"
+  }
+
+  # Determine new_max and new_net values
+  new_max <- ifelse(limit > adjusted_max, max_value, NA)
+  new_net <- NA # Initialize new_net to NA
+  # Determine new_net value
+  new_net <- ifelse(limit > adjusted_net, net_value, NA)
+
+  return(c(check_value, new_max, new_net))
+}
+
+# 1. CQG Data Processing ------------------------------------------------------
+
+# Read the static data, handling potential special characters in column names
+static_data <- read.csv("static_data.csv", header = TRUE, stringsAsFactors = FALSE)
+colnames(static_data) <- c("fidessa.Exchange","cqg.Exchange","tt.Exchange","fidessa.Code","cqg.Code","tt.Code","bbg.Code","Max","Net")
+
+# Read CQG data, handling potential special characters in column names
+cqg_data <- openxlsx::read.xlsx("CQG Data extract.xlsx")
+cqg_colnames <- c("IsvInstance","IsvTeType","IsvTeName","Exchange","Product","Type","Allowed.to.Trade","Trade.Size.Limit","Contract.Position.Limit","Commodity.Position.Limit","Client.Name","BDR.ID")
+colnames(cqg_data) <- cqg_colnames[1:ncol(cqg_data)]
+
+# Initialize output columns
+cqg_check <- character(nrow(cqg_data))
+cqg_new_max <- numeric(nrow(cqg_data))
+cqg_new_net <- numeric(nrow(cqg_data))
+
+# Loop through each row of the CQG data
+for (i in 1:nrow(cqg_data)) {
+  # Define is_option function for CQG
+  is_option_cqg <- function(row) {
+    grepl("Call option|Put option", row$Type)
+  }
+
+  # Compare Trade Size Limit against Max, Contract Position Limit and Commodity Position Limit against Net
+  trade_size_result <- compare_limits(cqg_data[i,], static_data, "Trade.Size.Limit", "Max", "Net", is_option_func = is_option_cqg)
+  contract_position_result <- compare_limits(cqg_data[i,], static_data, "Contract.Position.Limit", "Max", "Net", is_option_func = is_option_cqg)
+  commodity_position_result <- compare_limits(cqg_data[i,], static_data, "Commodity.Position.Limit", "Max", "Net", is_option_func = is_option_cqg)
+
+  # Determine final check value based on all three comparisons
+  if (trade_size_result[1] == "EXCEPTION" || contract_position_result[1] == "EXCEPTION" || commodity_position_result[1] == "EXCEPTION") {
+    cqg_check[i] <- "EXCEPTION"
+  } else if (trade_size_result[1] == "ILLIQUID PRODUCT" || contract_position_result[1] == "ILLIQUID PRODUCT" || commodity_position_result[1] == "ILLIQUID PRODUCT") {
+    cqg_check[i] <- "ILLIQUID PRODUCT"
+  } else {
+    cqg_check[i] <- "PASS"
+  }
+
+  # Set new_max and new_net to NA if any of the limits are exceeded
+  if (trade_size_result[1] == "EXCEPTION") {
+    cqg_new_max[i] <- trade_size_result[2]
+  } else {
+    cqg_new_max[i] <- NA
+  }
+
+  if (contract_position_result[1] == "EXCEPTION" || commodity_position_result[1] == "EXCEPTION") {
+    cqg_new_net[i] <- contract_position_result[2]
+  } else {
+    cqg_new_net[i] <- NA
+  }
+}
+
+# Add the new columns to the data frame
+cqg_data$Check <- cqg_check
+cqg_data$new_max <- cqg_new_max
+cqg_data$new_net <- cqg_new_net
+
+# Write the output to a CSV file
+write.csv(cqg_data, "CQG_Data_extract_output.csv", row.names = FALSE)
+
+# 2. TT Data Processing -------------------------------------------------------
+
+# Read TT data, handling potential special characters in column names
+tt_data <- openxlsx::read.xlsx("TT data extract.xlsx")
+tt_colnames <- c("IsvInstance","IsvTeType","IsvTeName","Exchange","Family","Type","Product","Enforce.energy.limits","Max.long.position..gross.","Max.order.quantity","Max.position.product..net.","Max.short.position..gross.","Spreads.Max.order.quantity","Spreads..Trading.allowed","Trading.Allowed","Column1","Client.Name","BDR.ID")
+colnames(tt_data) <- tt_colnames[1:ncol(tt_data)]
+
+# Initialize output columns
+tt_check <- character(nrow(tt_data))
+tt_new_max <- numeric(nrow(tt_data))
+tt_new_net <- numeric(nrow(tt_data))
+
+# Loop through each row of the TT data
+for (i in 1:nrow(tt_data)) {
+  # Define is_option and is_spread functions for TT
+  is_option_tt <- function(row) {
+    grepl("Option", row$Type)
+  }
+
+  is_spread_tt <- function(row) {
+    grepl("Spread|Option Strategy", row$Type)
+  }
+
+  # Determine the limit to compare and the corresponding static data columns
+  limit_column <- "Max.order.quantity"
+  net_column <- "Max.position.product..net."
+
+  # Compare Max order quantity against Max, Max position product (net) against Net
+  comparison_result <- compare_limits(tt_data[i,], static_data, limit_column, "Max", "Net",
+                                      is_option_func = is_option_tt, is_spread_func = is_spread_tt)
+
+  tt_check[i] <- comparison_result[1]
+  tt_new_max[i] <- comparison_result[2]
+  tt_new_net[i] <- comparison_result[3]
+}
+
+# Add the new columns to the data frame
+tt_data$Check <- tt_check
+tt_data$new_max <- tt_new_max
+tt_data$new_net <- tt_new_net
+
+# Write the output to a CSV file
+write.csv(tt_data, "TT_data_extract_output.csv", row.names = FALSE)
+
+# 3. Fidessa Data Processing --------------------------------------------------
+
+# Read Fidessa data, handling potential special characters in column names
+fidessa_data <- openxlsx::read.xlsx("Fidessa data extract.xlsx")
+fidessa_colnames <- c("IsvInstance","IsvTeType","IsvTeName","Model","Exchange","Product.group","Product","Asset.class","Max.ord.size","Max.algo.ord.size","Max.pos.size","Max.spread.pos")
+colnames(fidessa_data) <- fidessa_colnames[1:ncol(fidessa_data)]
+
+# Initialize output columns
+fidessa_check <- character(nrow(fidessa_data))
+fidessa_new_max <- numeric(nrow(fidessa_data))
+fidessa_new_net <- numeric(nrow(fidessa_data))
+
+# Loop through each row of the Fidessa data
+for (i in 1:nrow(fidessa_data)) {
+  # Define is_option and is_spread functions for Fidessa
+  is_option_fidessa <- function(row) {
+    grepl("OptOut", row$Asset.class)
+  }
+
+  is_spread_fidessa <- function(row) {
+    grepl("FuStr|OpStr", row$Asset.class)
+  }
+
+  # Determine the limit to compare and the corresponding static data columns
+  limit_column <- "Max.ord.size"
+  net_column <- ifelse(is_spread_fidessa(fidessa_data[i,]), "Max.spread.pos", "Max.pos.size")
+
+  # Compare Max ord size against Max, Max pos size (or Max spread pos for Spreads) against Net
+  comparison_result <- compare_limits(fidessa_data[i,], static_data, limit_column, "Max", "Net",
+                                      is_option_func = is_option_fidessa, is_spread_func = is_spread_fidessa)
+
+  fidessa_check[i] <- comparison_result[1]
+  fidessa_new_max[i] <- comparison_result[2]
+  fidessa_new_net[i] <- comparison_result[3]
+}
+
+# Add the new columns to the data frame
+fidessa_data$Check <- fidessa_check
+fidessa_data$new_max <- fidessa_new_max
+fidessa_data$new_net <- fidessa_new_net
+
+# Write the output to a CSV file
+write.csv(fidessa_data, "Fidessa_data_extract_output.csv", row.names = FALSE)
