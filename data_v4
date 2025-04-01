@@ -1,0 +1,210 @@
+# Script to process trading limits data from CQG, TT, and Fidessa files
+# against static data for comparison and validation
+
+# Load required libraries
+library(openxlsx)
+library(dplyr)
+library(tidyr)
+
+# Function to safely convert string to numeric, handling non-numeric values
+safe_as_numeric <- function(x) {
+  if (is.null(x) || is.na(x) || x == "" || x == "No Limit") {
+    return(0)
+  }
+  # Remove any commas from numbers
+  x <- gsub(",", "", x)
+  # Try to convert to numeric
+  result <- suppressWarnings(as.numeric(x))
+  if (is.na(result)) {
+    return(0)
+  }
+  return(result)
+}
+
+# Function to check if a product is an option
+is_option <- function(type, asset_class) {
+  if (!is.null(type)) {
+    return(grepl("Call option|Put option|Option", type, ignore.case = TRUE))
+  }
+  if (!is.null(asset_class)) {
+    return(grepl("OptOut", asset_class, ignore.case = TRUE))
+  }
+  return(FALSE)
+}
+
+# Function to check if a product is a spread
+is_spread <- function(type, asset_class) {
+  if (!is.null(type)) {
+    return(grepl("Spread|Option Strategy", type, ignore.case = TRUE))
+  }
+  if (!is.null(asset_class)) {
+    return(grepl("FuStr|OpStr", asset_class, ignore.case = TRUE))
+  }
+  return(FALSE)
+}
+
+# Read static data
+static_data <- read.csv("static_data.csv", stringsAsFactors = FALSE)
+
+# Process CQG data
+process_cqg <- function() {
+  # Read CQG data with specific column names
+  cqg_data <- read.xlsx("CQG Data extract.xlsx", 
+                       colNames = TRUE,
+                       detectDates = TRUE)
+  
+  # Initialize result columns
+  cqg_data$Check <- NA
+  cqg_data$new_max <- NA
+  cqg_data$new_net <- NA
+  
+  # Process each row
+  for (i in 1:nrow(cqg_data)) {
+    # Find matching static data row
+    static_match <- static_data[static_data$CQG.Exchange == cqg_data$Exchange[i] & 
+                               static_data$CQG.Code == cqg_data$Product[i], ]
+    
+    if (nrow(static_match) == 0) {
+      cqg_data$Check[i] <- "ILLIQUID PRODUCT"
+      next
+    }
+    
+    # Convert limits to numeric
+    trade_size_limit <- safe_as_numeric(cqg_data$Trade.Size.Limit[i])
+    contract_pos_limit <- safe_as_numeric(cqg_data$Contract.Position.Limit[i])
+    commodity_pos_limit <- safe_as_numeric(cqg_data$Commodity.Position.Limit[i])
+    
+    # Check if product is an option
+    is_opt <- is_option(cqg_data$Type[i], NULL)
+    multiplier <- ifelse(is_opt, 2, 1)
+    
+    # Compare limits
+    max_exception <- trade_size_limit > (static_match$Max * multiplier)
+    net_exception <- contract_pos_limit > (static_match$Net * multiplier) || 
+                    commodity_pos_limit > (static_match$Net * multiplier)
+    
+    # Set Check status
+    cqg_data$Check[i] <- ifelse(max_exception || net_exception, "EXCEPTION", "PASS")
+    
+    # Set new limits
+    cqg_data$new_max[i] <- ifelse(max_exception, static_match$Max, "NA")
+    cqg_data$new_net[i] <- ifelse(net_exception, static_match$Net, "NA")
+  }
+  
+  # Write output
+  write.csv(cqg_data, "CQG_processed_output.csv", row.names = FALSE)
+}
+
+# Process TT data
+process_tt <- function() {
+  # Read TT data with specific column names
+  tt_data <- read.xlsx("TT data extract.xlsx", 
+                      colNames = TRUE,
+                      detectDates = TRUE)
+  
+  # Initialize result columns
+  tt_data$Check <- NA
+  tt_data$new_max <- NA
+  tt_data$new_net <- NA
+  
+  # Process each row
+  for (i in 1:nrow(tt_data)) {
+    # Find matching static data row
+    static_match <- static_data[static_data$TT.Exchange == tt_data$Exchange[i] & 
+                               static_data$TT.Code == tt_data$Family[i], ]
+    
+    if (nrow(static_match) == 0) {
+      tt_data$Check[i] <- "ILLIQUID PRODUCT"
+      next
+    }
+    
+    # Convert limits to numeric
+    max_order_qty <- safe_as_numeric(tt_data$Max.order.quantity[i])
+    max_pos_net <- safe_as_numeric(tt_data$Max.position.product..net.[i])
+    spread_max_order_qty <- safe_as_numeric(tt_data$Spreads.Max.order.quantity[i])
+    
+    # Check if product is an option or spread
+    is_opt <- is_option(tt_data$Type[i], NULL)
+    is_sprd <- is_spread(tt_data$Type[i], NULL)
+    multiplier <- ifelse(is_opt || is_sprd, 2, 1)
+    
+    # Compare limits
+    max_exception <- ifelse(is_sprd,
+                          spread_max_order_qty > (static_match$Max * multiplier),
+                          max_order_qty > (static_match$Max * multiplier))
+    net_exception <- max_pos_net > (static_match$Net * multiplier)
+    
+    # Set Check status
+    tt_data$Check[i] <- ifelse(max_exception || net_exception, "EXCEPTION", "PASS")
+    
+    # Set new limits
+    tt_data$new_max[i] <- ifelse(max_exception, static_match$Max, "NA")
+    tt_data$new_net[i] <- ifelse(net_exception, static_match$Net, "NA")
+  }
+  
+  # Write output
+  write.csv(tt_data, "TT_processed_output.csv", row.names = FALSE)
+}
+
+# Process Fidessa data
+process_fidessa <- function() {
+  # Read Fidessa data with specific column names
+  fidessa_data <- read.xlsx("Fidessa data extract.xlsx", 
+                          colNames = TRUE,
+                          detectDates = TRUE)
+  
+  # Initialize result columns
+  fidessa_data$Check <- NA
+  fidessa_data$new_max <- NA
+  fidessa_data$new_net <- NA
+  
+  # Process each row
+  for (i in 1:nrow(fidessa_data)) {
+    # Find matching static data row
+    static_match <- static_data[static_data$Fidessa.Exchange == fidessa_data$Exchange[i] & 
+                               static_data$Fidessa.Code == fidessa_data$Product[i], ]
+    
+    if (nrow(static_match) == 0) {
+      fidessa_data$Check[i] <- "ILLIQUID PRODUCT"
+      next
+    }
+    
+    # Convert limits to numeric
+    max_ord_size <- safe_as_numeric(fidessa_data$Max.ord.size[i])
+    max_pos_size <- safe_as_numeric(fidessa_data$Max.pos.size[i])
+    max_spread_pos <- safe_as_numeric(fidessa_data$Max.spread.pos[i])
+    
+    # Check if product is an option or spread
+    is_opt <- is_option(NULL, fidessa_data$Asset.class[i])
+    is_sprd <- is_spread(NULL, fidessa_data$Asset.class[i])
+    multiplier <- ifelse(is_opt || is_sprd, 2, 1)
+    
+    # Compare limits
+    max_exception <- max_ord_size > (static_match$Max * multiplier)
+    net_exception <- ifelse(is_sprd,
+                          max_spread_pos > (static_match$Net * multiplier),
+                          max_pos_size > (static_match$Net * multiplier))
+    
+    # Set Check status
+    fidessa_data$Check[i] <- ifelse(max_exception || net_exception, "EXCEPTION", "PASS")
+    
+    # Set new limits
+    fidessa_data$new_max[i] <- ifelse(max_exception, static_match$Max, "NA")
+    fidessa_data$new_net[i] <- ifelse(net_exception, static_match$Net, "NA")
+  }
+  
+  # Write output
+  write.csv(fidessa_data, "Fidessa_processed_output.csv", row.names = FALSE)
+}
+
+# Main execution
+tryCatch({
+  # Process each file
+  process_cqg()
+  process_tt()
+  process_fidessa()
+  
+  cat("Processing completed successfully.\n")
+}, error = function(e) {
+  cat("An error occurred:", conditionMessage(e), "\n")
+}) 
